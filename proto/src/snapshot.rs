@@ -1,12 +1,31 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+use crate::packet::ValueKind;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricKind {
     U64,
     I64,
     F64,
     Bool,
+}
+
+impl From<&ValueKind> for MetricKind {
+    fn from(value: &ValueKind) -> Self {
+        match value {
+            ValueKind::U64(_) => Self::U64,
+            ValueKind::I64(_) => Self::I64,
+            ValueKind::F64(_) => Self::F64,
+            ValueKind::Bool(_) => Self::Bool,
+        }
+    }
+}
+
+impl From<ValueKind> for MetricKind {
+    fn from(value: ValueKind) -> Self {
+        Self::from(&value)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

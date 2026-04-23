@@ -97,9 +97,12 @@ to `timestamp_ms`, `U64`, `I64`, and `F64` payloads.
 | **Worst case** | `83`             |
 | `MAX_PACKET_BYTES` guardrail | `512` |
 
-The guardrail (`512`) leaves headroom well under the typical non-fragmented
-UDP MTU (~1200 B on the public internet, ~1472 B on a sane LAN). A single
-Flux packet will never fragment on any reasonable path.
+The 83-byte worst case sits comfortably below the typical non-fragmented
+UDP MTU (~1200 B on the public internet, ~1472 B on a sane LAN), so a
+Flux packet never fragments on any reasonable path. The `512` guardrail
+is the size buffer callers should allocate for receive — it is deliberately
+generous so future format extensions stay wire-compatible without retuning
+buffers.
 
 ## Worked examples
 

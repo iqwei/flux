@@ -99,6 +99,22 @@ fn name_length_boundaries_roundtrip() {
 }
 
 #[test]
+fn multibyte_utf8_name_roundtrips() {
+    let name = "µs.Δ".to_owned();
+    assert!(name.len() <= MAX_NAME_LEN);
+    assert!(
+        name.chars().count() < name.len(),
+        "test requires multi-byte chars"
+    );
+    let packet = FluxPacket::new(42, name.clone(), ValueKind::I64(-7));
+    let bytes = encode_to_vec(&packet);
+    assert_eq!(usize::from(bytes[9]), name.len());
+    let decoded = FluxPacket::decode(&bytes).unwrap();
+    assert_eq!(decoded, packet);
+    assert_eq!(decoded.name, name);
+}
+
+#[test]
 fn decode_rejects_name_longer_than_max() {
     let mut buf = vec![0u8; HEADER_BYTES + MAX_NAME_LEN + 2];
     buf[0] = PROTOCOL_VERSION;
@@ -187,13 +203,21 @@ fn decode_truncated_at_every_prefix_length() {
 
 #[test]
 fn nan_roundtrip_preserves_bits() {
-    let nan = f64::from_bits(0x7ff8_0000_0000_0001);
-    let packet = FluxPacket::new(1, "nan".into(), ValueKind::F64(nan));
-    let bytes = encode_to_vec(&packet);
-    let decoded = FluxPacket::decode(&bytes).unwrap();
-    match decoded.value {
-        ValueKind::F64(v) => assert_eq!(v.to_bits(), nan.to_bits()),
-        other => panic!("expected f64, got {other:?}"),
+    let bit_patterns = [
+        0x7ff8_0000_0000_0001u64, // quiet NaN
+        0x7ff0_0000_0000_0001,    // signalling NaN
+        0xfff8_0000_0000_0001,    // negative NaN
+    ];
+    for bits in bit_patterns {
+        let nan = f64::from_bits(bits);
+        assert!(nan.is_nan(), "test constant must be NaN");
+        let packet = FluxPacket::new(1, "nan".into(), ValueKind::F64(nan));
+        let bytes = encode_to_vec(&packet);
+        let decoded = FluxPacket::decode(&bytes).unwrap();
+        match decoded.value {
+            ValueKind::F64(v) => assert_eq!(v.to_bits(), bits),
+            other => panic!("expected f64, got {other:?}"),
+        }
     }
 }
 

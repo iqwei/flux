@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used)]
 
-use flux_proto::{MetricKind, MetricSummary, PipelineHealth, Snapshot, SNAPSHOT_SCHEMA_VERSION};
+use flux_proto::{
+    MetricKind, MetricSummary, PipelineHealth, Snapshot, ValueKind, SNAPSHOT_SCHEMA_VERSION,
+};
 
 fn sample_snapshot() -> Snapshot {
     Snapshot {
@@ -75,6 +77,20 @@ fn metric_kind_serialises_as_snake_case() {
         assert_eq!(serde_json::to_string(&kind).unwrap(), expected);
         let decoded: MetricKind = serde_json::from_str(expected).unwrap();
         assert_eq!(decoded, kind);
+    }
+}
+
+#[test]
+fn metric_kind_from_value_kind_matches_tag() {
+    let cases = [
+        (ValueKind::U64(0), MetricKind::U64),
+        (ValueKind::I64(-1), MetricKind::I64),
+        (ValueKind::F64(0.0), MetricKind::F64),
+        (ValueKind::Bool(false), MetricKind::Bool),
+    ];
+    for (value, expected) in cases {
+        assert_eq!(MetricKind::from(&value), expected);
+        assert_eq!(MetricKind::from(value), expected);
     }
 }
 
