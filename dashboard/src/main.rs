@@ -61,7 +61,7 @@ async fn run_app(cfg: DashboardConfig, terminal: &mut DashTerminal) -> Result<()
     let signal_handle = spawn_signal_watcher(cancel.clone());
     drop(tx);
 
-    let mut app = App::new(cfg.server_url.clone());
+    let mut app = App::new(&cfg);
     let mut render_tick = interval(Duration::from_millis(RENDER_INTERVAL_MS));
     render_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     render_tick.tick().await;
