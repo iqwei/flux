@@ -8,13 +8,20 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{fmt, EnvFilter};
 
 #[derive(Debug, Parser)]
-#[command(name = "flux-producer", version, about = "Flux UDP telemetry producer")]
+#[command(
+    name = "flux-producer",
+    version,
+    about = "Flux UDP telemetry producer",
+    long_about = "Emits binary Flux packets over UDP at a configurable rate per metric. \
+                  Simulators (constant, random range, sine, stepped) are defined in a TOML \
+                  config file. Zero-arg invocation runs a built-in set of demo metrics."
+)]
 struct Cli {
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
     #[arg(long, value_name = "ADDR")]
     target: Option<SocketAddr>,
-    #[arg(long, value_name = "LEVEL")]
+    #[arg(long, value_name = "FILTER")]
     log: Option<String>,
 }
 

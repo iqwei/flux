@@ -56,16 +56,8 @@ fn evicts_samples_at_window_boundary() {
     let mut store = MetricStore::new(window, start);
 
     store.ingest(f64_packet("x", 1.0), start, 0);
-    store.ingest(
-        f64_packet("x", 2.0),
-        start + Duration::from_millis(500),
-        0,
-    );
-    store.ingest(
-        f64_packet("x", 3.0),
-        start + Duration::from_millis(900),
-        0,
-    );
+    store.ingest(f64_packet("x", 2.0), start + Duration::from_millis(500), 0);
+    store.ingest(f64_packet("x", 3.0), start + Duration::from_millis(900), 0);
 
     let now = start + Duration::from_millis(1500);
     let summaries = store.summaries(now);

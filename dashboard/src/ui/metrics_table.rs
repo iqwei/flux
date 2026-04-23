@@ -1,11 +1,11 @@
 use flux_proto::MetricSummary;
 use ratatui::layout::{Alignment, Constraint, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Cell, Row, Table, TableState};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{App, Liveness};
+use crate::app::{App, ConnectionState, Liveness};
 use crate::fmt;
 
 const BORDER_ROWS: u16 = 2;
@@ -32,6 +32,17 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let total = app.metrics.len();
     let shown = visible.len();
 
+    let title = build_title(app, total, shown);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(title);
+
+    if visible.is_empty() {
+        render_empty(frame, app, area, block, total);
+        return;
+    }
+
     let rows: Vec<Row<'static>> = visible.iter().map(|m| row_for(app, m)).collect();
 
     let header = Row::new(
@@ -47,9 +58,6 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
             .fg(Color::Cyan),
     );
 
-    let title = build_title(app, total, shown);
-    let block = Block::default().borders(Borders::ALL).title(title);
-
     let body_rows = usize::from(area.height.saturating_sub(BORDER_ROWS + HEADER_ROW));
     let max_scroll = shown.saturating_sub(body_rows);
     let clamped_scroll = app.scroll.min(max_scroll);
@@ -60,17 +68,74 @@ pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let table = Table::new(rows, COLUMN_WIDTHS)
         .header(header)
         .block(block)
-        .column_spacing(1);
+        .column_spacing(2);
 
     frame.render_stateful_widget(table, area, &mut state);
 }
 
-fn build_title(app: &App, total: usize, shown: usize) -> String {
-    if app.filter.is_empty() {
-        format!(" flux · {total} metric(s) ")
-    } else {
-        format!(" flux · {shown}/{total} · filter: {} ", app.filter)
+fn render_empty(frame: &mut Frame<'_>, app: &App, area: Rect, block: Block<'_>, total: usize) {
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let lines = empty_state_lines(app, total);
+    let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
+    let centered = center_vertically(inner, 3);
+    frame.render_widget(paragraph, centered);
+}
+
+fn empty_state_lines(app: &App, total: usize) -> Vec<Line<'static>> {
+    let hint = match &app.connection {
+        ConnectionState::Connecting => "connecting to server…",
+        ConnectionState::Connected if total == 0 => {
+            "no producers yet · start flux-producer to begin"
+        }
+        ConnectionState::Connected => "no metrics match the current filter",
+        ConnectionState::Reconnecting { .. } => "reconnecting · last data kept when available",
+        ConnectionState::Disconnected => "disconnected · waiting to reconnect",
+    };
+    vec![
+        Line::from(Span::styled(
+            "flux",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray))),
+    ]
+}
+
+fn center_vertically(area: Rect, height: u16) -> Rect {
+    let h = height.min(area.height);
+    let y = area.y + area.height.saturating_sub(h) / 2;
+    Rect {
+        x: area.x,
+        y,
+        width: area.width,
+        height: h,
     }
+}
+
+fn build_title(app: &App, total: usize, shown: usize) -> Line<'static> {
+    let brand = Span::styled(
+        " FLUX ",
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    );
+    let sep = Span::styled(" · ", Style::default().fg(Color::DarkGray));
+    let counts = if app.filter.is_empty() {
+        format!("{total} metric{}", if total == 1 { "" } else { "s" })
+    } else {
+        format!("{shown}/{total} · filter \"{}\"", app.filter)
+    };
+    Line::from(vec![
+        Span::raw(" "),
+        brand,
+        sep,
+        Span::styled(counts, Style::default().fg(Color::Gray)),
+        Span::raw(" "),
+    ])
 }
 
 fn header_cell(label: &'static str, idx: usize) -> Cell<'static> {

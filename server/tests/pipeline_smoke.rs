@@ -85,3 +85,78 @@ async fn cancellation_shuts_down_cleanly_with_no_traffic() {
         .unwrap()
         .unwrap();
 }
+
+#[tokio::test]
+async fn shutdown_under_traffic_stays_within_budget_and_closes_ws() {
+    let cfg = ServerConfig {
+        shutdown_budget_ms: 750,
+        broadcast_interval_ms: 50,
+        ..ephemeral_cfg()
+    };
+    let cancel = CancellationToken::new();
+    let server = bind(cfg, cancel.clone()).await.unwrap();
+    let udp_addr = server.udp_addr;
+    let ws_url = format!("ws://{}/ws", server.ws_addr);
+    let wait_handle = tokio::spawn(server.wait());
+
+    let (mut ws, _) = timeout(
+        Duration::from_secs(2),
+        tokio_tungstenite::connect_async(&ws_url),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    let traffic_cancel = CancellationToken::new();
+    let traffic = spawn_producer(udp_addr, traffic_cancel.clone());
+    let _ = timeout(Duration::from_millis(400), ws.next()).await;
+
+    let start = Instant::now();
+    cancel.cancel();
+    traffic_cancel.cancel();
+    traffic.await.unwrap();
+
+    let mut saw_close = false;
+    while let Ok(Some(frame)) = timeout(Duration::from_millis(500), ws.next()).await {
+        match frame {
+            Ok(Message::Close(_)) => {
+                saw_close = true;
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+
+    timeout(Duration::from_secs(2), wait_handle)
+        .await
+        .expect("server did not shut down within 2s")
+        .unwrap()
+        .unwrap();
+
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(1_500),
+        "shutdown took {elapsed:?}, expected < 1500ms"
+    );
+    assert!(saw_close, "expected WS Close frame during shutdown");
+}
+
+fn spawn_producer(target: SocketAddr, cancel: CancellationToken) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let packet = FluxPacket::new(1_700_000_000_000, "load".into(), ValueKind::F64(1.0));
+        let mut buf = [0u8; MAX_PACKET_BYTES];
+        let n = packet.encode(&mut buf).unwrap();
+        let mut ticker = tokio::time::interval(Duration::from_millis(10));
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => return,
+                _ = ticker.tick() => {
+                    let _ = sock.send_to(&buf[..n], target).await;
+                }
+            }
+        }
+    })
+}

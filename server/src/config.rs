@@ -15,6 +15,7 @@ pub const DEFAULT_BROADCAST_BUFFER: usize = 16;
 pub const DEFAULT_ROLLING_WINDOW_MS: u64 = 5_000;
 pub const DEFAULT_STALE_AFTER_MS: u64 = 3_000;
 pub const DEFAULT_DEAD_AFTER_MS: u64 = 10_000;
+pub const DEFAULT_SHUTDOWN_BUDGET_MS: u64 = 500;
 
 const ENV_PREFIX: &str = "FLUX_";
 
@@ -29,6 +30,7 @@ pub struct ServerConfig {
     pub rolling_window_ms: u64,
     pub stale_after_ms: u64,
     pub dead_after_ms: u64,
+    pub shutdown_budget_ms: u64,
 }
 
 impl Default for ServerConfig {
@@ -42,6 +44,7 @@ impl Default for ServerConfig {
             rolling_window_ms: DEFAULT_ROLLING_WINDOW_MS,
             stale_after_ms: DEFAULT_STALE_AFTER_MS,
             dead_after_ms: DEFAULT_DEAD_AFTER_MS,
+            shutdown_budget_ms: DEFAULT_SHUTDOWN_BUDGET_MS,
         }
     }
 }
@@ -100,6 +103,9 @@ impl ServerConfig {
         if let Some(v) = parse_env::<u64>("DEAD_AFTER_MS")? {
             self.dead_after_ms = v;
         }
+        if let Some(v) = parse_env::<u64>("SHUTDOWN_BUDGET_MS")? {
+            self.shutdown_budget_ms = v;
+        }
         Ok(())
     }
 
@@ -127,6 +133,9 @@ impl ServerConfig {
         }
         if self.stale_after_ms >= self.dead_after_ms {
             return Err(anyhow!("stale_after_ms must be < dead_after_ms"));
+        }
+        if self.shutdown_budget_ms == 0 {
+            return Err(anyhow!("shutdown_budget_ms must be > 0"));
         }
         Ok(())
     }

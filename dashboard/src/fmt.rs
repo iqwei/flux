@@ -94,6 +94,19 @@ pub fn countdown_secs(ms: u64) -> String {
     format!("{secs}.{tenths}s")
 }
 
+#[must_use]
+pub fn integer_with_separators(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
+}
+
 fn bool_value(x: f64) -> &'static str {
     if x == 0.0 {
         "false"
@@ -163,6 +176,18 @@ mod tests {
         assert_eq!(uptime(65_000), "1m05s");
         assert_eq!(uptime(3_725_000), "1h02m");
         assert_eq!(uptime(90_000_000), "1d01h");
+    }
+
+    #[test]
+    fn integer_with_separators_formats_thousands() {
+        assert_eq!(integer_with_separators(0), "0");
+        assert_eq!(integer_with_separators(999), "999");
+        assert_eq!(integer_with_separators(1_000), "1,000");
+        assert_eq!(integer_with_separators(1_234_567), "1,234,567");
+        assert_eq!(
+            integer_with_separators(u64::MAX),
+            "18,446,744,073,709,551,615"
+        );
     }
 
     #[test]

@@ -26,7 +26,13 @@ const INPUT_POLL_MS: u64 = 100;
 type DashTerminal = Terminal<CrosstermBackend<Stdout>>;
 
 #[derive(Debug, Parser)]
-#[command(name = "flux-dashboard", version, about = "Flux terminal dashboard")]
+#[command(
+    name = "flux-dashboard",
+    version,
+    about = "Flux terminal dashboard",
+    long_about = "Terminal UI subscriber for a flux-server WebSocket. Auto-reconnects with \
+                  jittered exponential backoff. Defaults to <ws://127.0.0.1:9001/ws>."
+)]
 struct Cli {
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,

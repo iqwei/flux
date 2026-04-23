@@ -1,6 +1,7 @@
 use std::sync::Arc;
+use std::time::Duration;
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::Response;
 use axum::routing::get;
@@ -8,9 +9,12 @@ use axum::Router;
 use flux_proto::Snapshot;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::ingest::Event;
+
+const FINAL_SNAPSHOT_WAIT: Duration = Duration::from_millis(200);
 
 #[derive(Debug)]
 pub(crate) struct WsState {
@@ -23,35 +27,71 @@ pub(crate) async fn ws_task(
     state: Arc<WsState>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
+    let shutdown = cancel.clone();
     let router = Router::new()
         .route("/ws", get(ws_handler))
-        .with_state(state);
+        .with_state(AppState { state, cancel });
     axum::serve(listener, router)
-        .with_graceful_shutdown(async move { cancel.cancelled().await })
+        .with_graceful_shutdown(async move { shutdown.cancelled().await })
         .await?;
     Ok(())
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<WsState>>) -> Response {
-    ws.on_upgrade(move |socket| run_subscriber(socket, state))
+#[derive(Clone)]
+struct AppState {
+    state: Arc<WsState>,
+    cancel: CancellationToken,
 }
 
-async fn run_subscriber(mut socket: WebSocket, state: Arc<WsState>) {
+async fn ws_handler(ws: WebSocketUpgrade, State(app): State<AppState>) -> Response {
+    ws.on_upgrade(move |socket| run_subscriber(socket, app.state, app.cancel))
+}
+
+const CLOSE_CODE_NORMAL: u16 = 1000;
+const CLOSE_CODE_POLICY: u16 = 1008;
+
+async fn run_subscriber(mut socket: WebSocket, state: Arc<WsState>, cancel: CancellationToken) {
     let mut rx = state.snapshots.subscribe();
     if let Err(err) = state.events.try_send(Event::SubscriberJoin) {
         tracing::warn!(%err, "failed to emit SubscriberJoin");
     }
-    let reason = drive(&mut socket, &mut rx).await;
-    match reason {
+    let reason = drive(&mut socket, &mut rx, &cancel).await;
+    let close = match reason {
         ExitReason::Lagged(n) => {
             tracing::warn!(dropped = n, "subscriber lagging, disconnecting");
+            Some((CLOSE_CODE_POLICY, "lagged"))
         }
-        ExitReason::Closed | ExitReason::ClientGone | ExitReason::SendFailed => {}
-    }
+        ExitReason::Closed => {
+            forward_final_snapshot(&mut socket, &mut rx).await;
+            Some((CLOSE_CODE_NORMAL, "server shutdown"))
+        }
+        ExitReason::ClientGone | ExitReason::SendFailed => None,
+    };
     if let Err(err) = state.events.try_send(Event::SubscriberLeave) {
         tracing::debug!(%err, "failed to emit SubscriberLeave");
     }
+    if let Some((code, reason)) = close {
+        let _ = socket
+            .send(Message::Close(Some(CloseFrame {
+                code,
+                reason: std::borrow::Cow::Borrowed(reason),
+            })))
+            .await;
+    }
     let _ = socket.close().await;
+}
+
+async fn forward_final_snapshot(
+    socket: &mut WebSocket,
+    rx: &mut broadcast::Receiver<Arc<Snapshot>>,
+) {
+    let Ok(res) = timeout(FINAL_SNAPSHOT_WAIT, rx.recv()).await else {
+        return;
+    };
+    let Ok(snap) = res else { return };
+    if let Ok(json) = serde_json::to_string(snap.as_ref()) {
+        let _ = socket.send(Message::Text(json)).await;
+    }
 }
 
 #[derive(Debug)]
@@ -62,9 +102,14 @@ enum ExitReason {
     SendFailed,
 }
 
-async fn drive(socket: &mut WebSocket, rx: &mut broadcast::Receiver<Arc<Snapshot>>) -> ExitReason {
+async fn drive(
+    socket: &mut WebSocket,
+    rx: &mut broadcast::Receiver<Arc<Snapshot>>,
+    cancel: &CancellationToken,
+) -> ExitReason {
     loop {
         tokio::select! {
+            () = cancel.cancelled() => return ExitReason::Closed,
             frame = rx.recv() => match frame {
                 Ok(snap) => {
                     let json = match serde_json::to_string(snap.as_ref()) {

@@ -6,6 +6,7 @@ pub mod sim;
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use tokio::net::UdpSocket;
@@ -36,17 +37,48 @@ pub async fn run(cfg: ProducerConfig, cancel: CancellationToken) -> Result<()> {
     }
 
     let mut first_err: Option<anyhow::Error> = None;
-    while let Some(res) = tasks.join_next().await {
-        let err = match res {
-            Ok(Ok(())) => continue,
-            Ok(Err(err)) => err,
-            Err(join_err) => anyhow::Error::new(join_err),
-        };
-        tracing::error!(error = ?err, "emitter task failed");
-        if first_err.is_none() {
-            first_err = Some(err);
-            cancel.cancel();
+    let mut shutdown_at: Option<Instant> = None;
+    let cancelled = cancel.cancelled();
+    tokio::pin!(cancelled);
+
+    loop {
+        tokio::select! {
+            biased;
+            () = &mut cancelled, if shutdown_at.is_none() => {
+                shutdown_at = Some(Instant::now());
+            }
+            maybe = tasks.join_next() => {
+                let Some(res) = maybe else { break };
+                match res {
+                    Ok(Ok(())) => {}
+                    Err(join) if join.is_cancelled() => {}
+                    Ok(Err(err)) => {
+                        tracing::error!(error = ?err, "emitter task failed");
+                        if first_err.is_none() {
+                            first_err = Some(err);
+                            shutdown_at.get_or_insert_with(Instant::now);
+                            cancel.cancel();
+                        }
+                    }
+                    Err(join_err) => {
+                        let err = anyhow::Error::new(join_err);
+                        tracing::error!(error = ?err, "emitter task aborted");
+                        if first_err.is_none() {
+                            first_err = Some(err);
+                            shutdown_at.get_or_insert_with(Instant::now);
+                            cancel.cancel();
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    if let Some(start) = shutdown_at {
+        tracing::info!(
+            elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "producer shutdown complete"
+        );
     }
     match first_err {
         Some(e) => Err(e),

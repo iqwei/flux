@@ -9,12 +9,18 @@ use crate::fmt;
 
 pub fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let (symbol, text, color) = status_text(app);
+    let badge_style = if matches!(app.connection, ConnectionState::Connected) {
+        Style::default().fg(color).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(Color::Black)
+            .bg(color)
+            .add_modifier(Modifier::BOLD)
+    };
     let mut spans = vec![
-        Span::styled(
-            format!(" {symbol} "),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(text),
+        Span::styled(format!(" {symbol} "), badge_style),
+        Span::raw(" "),
+        Span::styled(text, Style::default().fg(Color::Gray)),
     ];
     spans.extend(hint_spans(app.filter_mode));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -65,15 +71,23 @@ fn status_text(app: &App) -> (&'static str, String, Color) {
                 Color::Green,
             )
         }
-        ConnectionState::Reconnecting { attempt, in_ms } => (
-            "◐",
-            format!(
-                "reconnecting {} · try {attempt}, next in {}",
-                app.server_url,
-                fmt::countdown_secs(*in_ms),
-            ),
-            Color::Yellow,
-        ),
+        ConnectionState::Reconnecting {
+            attempt,
+            in_ms,
+            since,
+        } => {
+            let elapsed = u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let remaining = in_ms.saturating_sub(elapsed);
+            (
+                "◐",
+                format!(
+                    "reconnecting {} · try {attempt}, next in {}",
+                    app.server_url,
+                    fmt::countdown_secs(remaining),
+                ),
+                Color::Yellow,
+            )
+        }
         ConnectionState::Disconnected => {
             ("✕", format!("disconnected {}", app.server_url), Color::Red)
         }

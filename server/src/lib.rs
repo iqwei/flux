@@ -8,12 +8,14 @@ mod ws;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use flux_proto::Snapshot;
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::{broadcast as bcast, mpsc};
 use tokio::task::JoinSet;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 pub use crate::clock::{Clock, SystemClock};
@@ -31,27 +33,85 @@ pub struct BoundServer {
     pub udp_addr: SocketAddr,
     pub ws_addr: SocketAddr,
     cancel: CancellationToken,
+    shutdown_budget: Duration,
     tasks: JoinSet<anyhow::Result<()>>,
 }
 
 impl BoundServer {
     pub async fn wait(mut self) -> anyhow::Result<()> {
         let mut first_err: Option<anyhow::Error> = None;
-        while let Some(res) = self.tasks.join_next().await {
-            let err = match res {
-                Ok(Ok(())) => continue,
-                Ok(Err(err)) => err,
-                Err(join_err) => anyhow::Error::new(join_err),
-            };
-            if first_err.is_none() {
-                first_err = Some(err);
-                self.cancel.cancel();
+        loop {
+            tokio::select! {
+                biased;
+                () = self.cancel.cancelled() => break,
+                res = self.tasks.join_next() => match res {
+                    None => return Ok(()),
+                    Some(outcome) => {
+                        if let Some(err) = task_error(outcome) {
+                            first_err.get_or_insert(err);
+                            self.cancel.cancel();
+                            break;
+                        }
+                    }
+                }
             }
         }
+
+        let started = Instant::now();
+        let remaining = self.shutdown_budget;
+        if timeout(remaining, drain_tasks(&mut self.tasks, &mut first_err))
+            .await
+            .is_ok()
+        {
+            tracing::info!(
+                elapsed_ms = ms_from(started.elapsed()),
+                "server shutdown complete"
+            );
+        } else {
+            tracing::warn!(
+                budget_ms = ms_from(remaining),
+                "shutdown budget exceeded, aborting remaining tasks"
+            );
+            self.tasks.abort_all();
+            while self.tasks.join_next().await.is_some() {}
+        }
+
         match first_err {
             Some(e) => Err(e),
             None => Ok(()),
         }
+    }
+}
+
+async fn drain_tasks(
+    tasks: &mut JoinSet<anyhow::Result<()>>,
+    first_err: &mut Option<anyhow::Error>,
+) {
+    while let Some(outcome) = tasks.join_next().await {
+        if let Some(err) = task_error(outcome) {
+            first_err.get_or_insert(err);
+        }
+    }
+}
+
+fn task_error(
+    outcome: Result<anyhow::Result<()>, tokio::task::JoinError>,
+) -> Option<anyhow::Error> {
+    match outcome {
+        Ok(Ok(())) => None,
+        Ok(Err(err)) => Some(err),
+        Err(join) if join.is_cancelled() => None,
+        Err(join) => Some(anyhow::Error::new(join)),
+    }
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn ms_from(d: Duration) -> u64 {
+    let ms = d.as_millis();
+    if ms > u128::from(u64::MAX) {
+        u64::MAX
+    } else {
+        ms as u64
     }
 }
 
@@ -107,10 +167,12 @@ pub async fn bind_with_clock(
         tasks.spawn(async move { ws_task(ws_listener, state, cancel).await });
     }
 
+    let shutdown_budget = Duration::from_millis(cfg.shutdown_budget_ms);
     Ok(BoundServer {
         udp_addr,
         ws_addr,
         cancel,
+        shutdown_budget,
         tasks,
     })
 }

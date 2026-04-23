@@ -10,7 +10,11 @@ use tracing_subscriber::{fmt, EnvFilter};
 #[command(
     name = "flux-server",
     version,
-    about = "Flux aggregation + WebSocket broadcast server"
+    about = "Flux aggregation + WebSocket broadcast server",
+    long_about = "Receives binary UDP packets from flux-producer(s), aggregates per-metric \
+                  statistics in a rolling window, and broadcasts JSON snapshots to every \
+                  WebSocket subscriber at a fixed interval. Configure via TOML, FLUX_* \
+                  environment variables, or CLI overrides (CLI > env > file > defaults)."
 )]
 struct Cli {
     #[arg(long, value_name = "PATH")]
@@ -19,7 +23,7 @@ struct Cli {
     udp_port: Option<u16>,
     #[arg(long, value_name = "PORT")]
     ws_port: Option<u16>,
-    #[arg(long, value_name = "LEVEL")]
+    #[arg(long, value_name = "FILTER")]
     log: Option<String>,
 }
 

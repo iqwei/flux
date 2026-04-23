@@ -31,7 +31,13 @@ pub(crate) async fn aggregator_task(
     loop {
         tokio::select! {
             biased;
-            () = cancel.cancelled() => return Ok(()),
+            () = cancel.cancelled() => {
+                drain(&mut rx, &mut store, &mut health, clock.as_ref());
+                let snap = build_snapshot(&mut store, &mut health, clock.as_ref());
+                let _ = snap_tx.send(Arc::new(snap));
+                tracing::debug!("aggregator: final snapshot emitted, exiting");
+                return Ok(());
+            }
             _ = ticker.tick() => {
                 let snap = build_snapshot(&mut store, &mut health, clock.as_ref());
                 let _ = snap_tx.send(Arc::new(snap));
@@ -41,6 +47,17 @@ pub(crate) async fn aggregator_task(
                 None => return Ok(()),
             }
         }
+    }
+}
+
+fn drain(
+    rx: &mut mpsc::Receiver<Event>,
+    store: &mut MetricStore,
+    health: &mut HealthTracker,
+    clock: &dyn Clock,
+) {
+    while let Ok(event) = rx.try_recv() {
+        apply_event(event, store, health, clock);
     }
 }
 

@@ -27,7 +27,11 @@ pub enum Flow {
 pub enum ConnectionState {
     Connecting,
     Connected,
-    Reconnecting { attempt: u32, in_ms: u64 },
+    Reconnecting {
+        attempt: u32,
+        in_ms: u64,
+        since: Instant,
+    },
     Disconnected,
 }
 
@@ -86,7 +90,11 @@ impl App {
                 Flow::Continue
             }
             AppEvent::Reconnecting { attempt, in_ms } => {
-                self.connection = ConnectionState::Reconnecting { attempt, in_ms };
+                self.connection = ConnectionState::Reconnecting {
+                    attempt,
+                    in_ms,
+                    since: Instant::now(),
+                };
                 Flow::Continue
             }
             AppEvent::Key(key) => self.handle_key(key),
@@ -361,13 +369,14 @@ mod tests {
             attempt: 3,
             in_ms: 500,
         });
-        assert_eq!(
+        assert!(matches!(
             a.connection,
             ConnectionState::Reconnecting {
                 attempt: 3,
-                in_ms: 500
+                in_ms: 500,
+                ..
             }
-        );
+        ));
         a.on(AppEvent::Connected);
         assert_eq!(a.connection, ConnectionState::Connected);
     }
