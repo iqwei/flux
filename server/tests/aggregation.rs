@@ -1,11 +1,17 @@
 #![allow(clippy::unwrap_used, clippy::float_cmp)]
 
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use flux_proto::{FluxPacket, MetricKind, PipelineHealth, ValueKind, PROTOCOL_VERSION};
+use flux_proto::{FluxPacket, MetricKind, PipelineHealth, Snapshot, ValueKind, PROTOCOL_VERSION};
 use flux_server::health::HealthTracker;
 use flux_server::metric_store::MetricStore;
-use flux_server::{Clock, FakeClock};
+use flux_server::{bind_with_clock, Clock, FakeClock, ServerConfig};
+use futures_util::StreamExt;
+use tokio::time::timeout;
+use tokio_tungstenite::tungstenite::protocol::Message;
+use tokio_util::sync::CancellationToken;
 
 const EPS: f64 = 1e-9;
 
@@ -18,6 +24,10 @@ fn packet(name: &str, value: ValueKind, ts_ms: u64) -> FluxPacket {
     }
 }
 
+fn f64_packet(name: &str, v: f64) -> FluxPacket {
+    packet(name, ValueKind::F64(v), 0)
+}
+
 #[test]
 fn summarises_last_min_max_avg_from_window() {
     let start = Instant::now();
@@ -26,7 +36,7 @@ fn summarises_last_min_max_avg_from_window() {
 
     for v in [10.0_f64, 20.0, 5.0, 30.0, 15.0] {
         now += Duration::from_millis(100);
-        store.update("temp".into(), MetricKind::F64, v, now, 42);
+        store.ingest(f64_packet("temp", v), now, 42);
     }
 
     let summaries = store.summaries(now);
@@ -45,18 +55,14 @@ fn evicts_samples_at_window_boundary() {
     let window = Duration::from_secs(1);
     let mut store = MetricStore::new(window, start);
 
-    store.update("x".into(), MetricKind::F64, 1.0, start, 0);
-    store.update(
-        "x".into(),
-        MetricKind::F64,
-        2.0,
+    store.ingest(f64_packet("x", 1.0), start, 0);
+    store.ingest(
+        f64_packet("x", 2.0),
         start + Duration::from_millis(500),
         0,
     );
-    store.update(
-        "x".into(),
-        MetricKind::F64,
-        3.0,
+    store.ingest(
+        f64_packet("x", 3.0),
         start + Duration::from_millis(900),
         0,
     );
@@ -78,7 +84,7 @@ fn empty_window_reports_none_for_stats_but_keeps_last() {
     let window = Duration::from_millis(100);
     let mut store = MetricStore::new(window, start);
 
-    store.update("y".into(), MetricKind::F64, 7.0, start, 1);
+    store.ingest(f64_packet("y", 7.0), start, 1);
 
     let now = start + Duration::from_secs(5);
     let summaries = store.summaries(now);
@@ -100,7 +106,7 @@ fn rate_pps_divides_by_elapsed_uptime_when_shorter_than_window() {
     for i in 0..5_u64 {
         let at = start + Duration::from_millis(100 * i);
         #[allow(clippy::cast_precision_loss)]
-        store.update("r".into(), MetricKind::F64, i as f64, at, 0);
+        store.ingest(f64_packet("r", i as f64), at, 0);
     }
 
     let now = start + Duration::from_millis(500);
@@ -118,7 +124,7 @@ fn rate_pps_divides_by_window_when_uptime_exceeds_it() {
     for (i, ms) in [2100_u64, 2200, 2300].iter().enumerate() {
         let at = start + Duration::from_millis(*ms);
         #[allow(clippy::cast_precision_loss)]
-        store.update("r".into(), MetricKind::F64, i as f64, at, 0);
+        store.ingest(f64_packet("r", i as f64), at, 0);
     }
 
     let now = start + Duration::from_secs(3);
@@ -128,27 +134,38 @@ fn rate_pps_divides_by_window_when_uptime_exceeds_it() {
 }
 
 #[test]
-fn ingest_consumes_flux_packet_and_derives_kind() {
+fn last_update_ms_reflects_server_wall_clock_not_packet_timestamp() {
     let start = Instant::now();
     let mut store = MetricStore::new(Duration::from_secs(1), start);
 
     store.ingest(
         packet("b", ValueKind::Bool(true), 100),
         start + Duration::from_millis(50),
-        100,
-    );
-    store.ingest(
-        packet("b", ValueKind::Bool(false), 200),
-        start + Duration::from_millis(150),
-        200,
+        999,
     );
 
     let summaries = store.summaries(start + Duration::from_millis(200));
     let b = summaries.iter().find(|s| s.name == "b").unwrap();
+    assert_eq!(b.last, Some(1.0));
+    assert_eq!(b.sample_count, 1);
+    assert_eq!(b.last_update_ms, Some(999));
+}
+
+#[test]
+fn ingest_derives_kind_from_value() {
+    let start = Instant::now();
+    let mut store = MetricStore::new(Duration::from_secs(1), start);
+
+    store.ingest(
+        packet("b", ValueKind::Bool(false), 0),
+        start + Duration::from_millis(50),
+        0,
+    );
+
+    let summaries = store.summaries(start + Duration::from_millis(100));
+    let b = summaries.iter().find(|s| s.name == "b").unwrap();
     assert_eq!(b.kind, MetricKind::Bool);
     assert_eq!(b.last, Some(0.0));
-    assert_eq!(b.sample_count, 2);
-    assert_eq!(b.last_update_ms, Some(200));
 }
 
 #[test]
@@ -158,7 +175,7 @@ fn parse_error_counter_increments_independently() {
     h.on_parse_error();
     h.on_parse_error();
     h.on_parse_error();
-    let p = h.build(start + Duration::from_millis(10));
+    let p = h.snapshot(start + Duration::from_millis(10));
     assert_eq!(p.packets_parse_err, 3);
     assert_eq!(p.packets_received, 0);
     assert_eq!(p.ingest_rate_pps, 0.0);
@@ -172,7 +189,7 @@ fn subscriber_count_tracks_joins_and_leaves_saturating() {
     h.on_subscriber_join();
     h.on_subscriber_join();
     h.on_subscriber_leave();
-    let p = h.build(start + Duration::from_millis(10));
+    let p = h.snapshot(start + Duration::from_millis(10));
     assert_eq!(p.subscriber_count, 1);
 }
 
@@ -186,33 +203,36 @@ fn global_ingest_rate_pps_uses_rolling_window() {
         h.on_packet(start + Duration::from_millis(100 * i));
     }
 
-    let p = h.build(start + Duration::from_secs(1));
+    let p = h.snapshot(start + Duration::from_secs(1));
     assert!((p.ingest_rate_pps - 10.0).abs() < EPS);
     assert_eq!(p.packets_received, 10);
     assert_eq!(p.uptime_ms, 1000);
 
-    let idle = h.build(start + Duration::from_secs(3));
+    let idle = h.snapshot(start + Duration::from_secs(3));
     assert!(idle.ingest_rate_pps.abs() < EPS);
     assert_eq!(idle.packets_received, 10);
 }
 
 #[test]
-fn health_uptime_ms_advances_with_now() {
+fn snapshot_uptime_ms_advances_with_now() {
     let start = Instant::now();
-    let h = HealthTracker::new(Duration::from_secs(1), start);
-    assert_eq!(h.uptime_ms(start), 0);
-    assert_eq!(h.uptime_ms(start + Duration::from_millis(750)), 750);
+    let mut h = HealthTracker::new(Duration::from_secs(1), start);
+    assert_eq!(h.snapshot(start).uptime_ms, 0);
+    assert_eq!(
+        h.snapshot(start + Duration::from_millis(750)).uptime_ms,
+        750
+    );
 }
 
 #[test]
-fn build_produces_filled_pipeline_health() {
+fn snapshot_produces_filled_pipeline_health() {
     let start = Instant::now();
     let mut h = HealthTracker::new(Duration::from_secs(1), start);
     h.on_packet(start + Duration::from_millis(10));
     h.on_subscriber_join();
     h.on_parse_error();
 
-    let p: PipelineHealth = h.build(start + Duration::from_millis(500));
+    let p: PipelineHealth = h.snapshot(start + Duration::from_millis(500));
     assert_eq!(p.packets_received, 1);
     assert_eq!(p.packets_parse_err, 1);
     assert_eq!(p.subscriber_count, 1);
@@ -220,16 +240,49 @@ fn build_produces_filled_pipeline_health() {
     assert!(p.ingest_rate_pps > 0.0);
 }
 
-#[test]
-fn fake_clock_advances_instant_and_unix_ms() {
-    let clock = FakeClock::new(1_700_000_000_000);
-    let t0 = clock.now();
-    let u0 = clock.unix_ms();
+#[tokio::test]
+async fn aggregator_task_stamps_snapshot_with_injected_clock() {
+    const FAKE_UNIX_MS: u64 = 1_700_000_000_000;
 
-    clock.advance(Duration::from_millis(250));
-    assert_eq!(clock.unix_ms() - u0, 250);
-    assert_eq!(clock.now().duration_since(t0), Duration::from_millis(250));
+    let cfg = ServerConfig {
+        udp_bind: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        ws_bind: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        broadcast_interval_ms: 50,
+        ..ServerConfig::default()
+    };
+    let clock: Arc<dyn Clock> = Arc::new(FakeClock::new(FAKE_UNIX_MS));
+    let cancel = CancellationToken::new();
+    let server = bind_with_clock(cfg, Arc::clone(&clock), cancel.clone())
+        .await
+        .unwrap();
+    let ws_url = format!("ws://{}/ws", server.ws_addr);
+    let wait_handle = tokio::spawn(server.wait());
 
-    clock.set_unix_ms(2_000_000_000_000);
-    assert_eq!(clock.unix_ms(), 2_000_000_000_000);
+    let (mut ws, _resp) = timeout(
+        Duration::from_secs(2),
+        tokio_tungstenite::connect_async(&ws_url),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    let snap: Snapshot = loop {
+        let msg = timeout(Duration::from_secs(2), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        if let Message::Text(text) = msg {
+            break serde_json::from_str(&text).unwrap();
+        }
+    };
+    assert_eq!(snap.generated_at_ms, FAKE_UNIX_MS);
+
+    let _ = ws.close(None).await;
+    cancel.cancel();
+    timeout(Duration::from_secs(3), wait_handle)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 }

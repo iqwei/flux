@@ -16,8 +16,11 @@ use tokio::sync::{broadcast as bcast, mpsc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-pub use crate::clock::{Clock, FakeClock, SystemClock};
+pub use crate::clock::{Clock, SystemClock};
 pub use crate::config::{ConfigOverrides, ServerConfig};
+
+#[doc(hidden)]
+pub use crate::clock::FakeClock;
 
 use crate::aggregator::aggregator_task;
 use crate::ingest::{ingress_task, Event};

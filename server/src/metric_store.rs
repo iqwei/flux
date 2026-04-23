@@ -10,7 +10,7 @@ struct Sample {
 }
 
 #[derive(Debug)]
-pub struct MetricState {
+struct MetricState {
     kind: MetricKind,
     last: f64,
     sample_count: u64,
@@ -126,7 +126,7 @@ impl MetricStore {
         self.update(packet.name, kind, value, at, unix_ms);
     }
 
-    pub fn update(
+    pub(crate) fn update(
         &mut self,
         name: String,
         kind: MetricKind,
@@ -147,7 +147,6 @@ impl MetricStore {
         }
     }
 
-    #[must_use]
     pub fn summaries(&mut self, now: Instant) -> Vec<MetricSummary> {
         let cutoff = self.cutoff(now);
         for state in self.map.values_mut() {
@@ -160,16 +159,6 @@ impl MetricStore {
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out
-    }
-
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.map.len()
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
     }
 
     fn cutoff(&self, now: Instant) -> Instant {

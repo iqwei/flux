@@ -71,8 +71,7 @@ impl Clock for FakeClock {
 }
 
 #[allow(clippy::cast_possible_truncation)]
-#[must_use]
-pub fn duration_to_ms(d: Duration) -> u64 {
+pub(crate) fn duration_to_ms(d: Duration) -> u64 {
     let ms = d.as_millis();
     if ms > u128::from(u64::MAX) {
         u64::MAX
@@ -86,13 +85,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fake_clock_advances_instant_and_unix_ms() {
+    fn fake_clock_advances_and_sets_unix_ms() {
         let clock = FakeClock::new(1_700_000_000_000);
         let t0 = clock.now();
         let u0 = clock.unix_ms();
+
         clock.advance(Duration::from_millis(250));
         assert_eq!(clock.unix_ms() - u0, 250);
         assert_eq!(clock.now().duration_since(t0), Duration::from_millis(250));
+
+        clock.set_unix_ms(2_000_000_000_000);
+        assert_eq!(clock.unix_ms(), 2_000_000_000_000);
     }
 
     #[test]

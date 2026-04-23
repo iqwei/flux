@@ -45,12 +45,7 @@ impl HealthTracker {
         self.subscriber_count = self.subscriber_count.saturating_sub(1);
     }
 
-    #[must_use]
-    pub fn uptime_ms(&self, now: Instant) -> u64 {
-        duration_to_ms(now.saturating_duration_since(self.started_at))
-    }
-
-    pub fn build(&mut self, now: Instant) -> PipelineHealth {
+    pub fn snapshot(&mut self, now: Instant) -> PipelineHealth {
         self.evict(now);
         let uptime = now.saturating_duration_since(self.started_at);
         let divisor = uptime.min(self.window).as_secs_f64();

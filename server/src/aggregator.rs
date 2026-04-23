@@ -53,6 +53,8 @@ fn apply_event(
     match event {
         Event::Packet(packet, at) => {
             health.on_packet(at);
+            // last_update_ms is stamped with server wall clock, not packet.timestamp_ms,
+            // so staleness detection is robust to producer clock skew.
             store.ingest(packet, at, clock.unix_ms());
         }
         Event::ParseError => health.on_parse_error(),
@@ -69,7 +71,7 @@ fn build_snapshot(
     let now = clock.now();
     let generated_at_ms = clock.unix_ms();
     let metrics = store.summaries(now);
-    let pipeline = health.build(now);
+    let pipeline = health.snapshot(now);
     Snapshot {
         schema_version: SNAPSHOT_SCHEMA_VERSION,
         generated_at_ms,
