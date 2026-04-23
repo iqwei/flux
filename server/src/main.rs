@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use flux_server::{ConfigOverrides, ServerConfig};
 use tokio_util::sync::CancellationToken;
@@ -26,7 +26,7 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    init_tracing(cli.log.as_deref());
+    init_tracing(cli.log.as_deref())?;
 
     let overrides = ConfigOverrides {
         udp_port: cli.udp_port,
@@ -41,9 +41,10 @@ async fn main() -> Result<()> {
     flux_server::run(cfg, cancel).await
 }
 
-fn init_tracing(level: Option<&str>) {
+fn init_tracing(level: Option<&str>) -> Result<()> {
     let filter = match level {
-        Some(explicit) => EnvFilter::try_new(explicit).unwrap_or_else(|_| EnvFilter::new("info")),
+        Some(explicit) => EnvFilter::try_new(explicit)
+            .with_context(|| format!("invalid --log filter: {explicit}"))?,
         None => EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
     };
     let _ = fmt()
@@ -51,14 +52,20 @@ fn init_tracing(level: Option<&str>) {
         .with_target(false)
         .with_level(true)
         .try_init();
+    Ok(())
 }
 
 fn spawn_shutdown(cancel: CancellationToken) {
     tokio::spawn(async move {
-        match tokio::signal::ctrl_c().await {
-            Ok(()) => tracing::info!("ctrl-c received, shutting down"),
-            Err(err) => tracing::error!(%err, "failed to install ctrl-c handler"),
+        tokio::select! {
+            res = tokio::signal::ctrl_c() => {
+                match res {
+                    Ok(()) => tracing::info!("ctrl-c received, shutting down"),
+                    Err(err) => tracing::error!(%err, "failed to install ctrl-c handler"),
+                }
+                cancel.cancel();
+            }
+            () = cancel.cancelled() => {}
         }
-        cancel.cancel();
     });
 }

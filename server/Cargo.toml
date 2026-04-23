@@ -25,4 +25,4 @@ anyhow = { workspace = true }
 
 [dev-dependencies]
 tokio-tungstenite = { workspace = true }
-futures-util = { workspace = true, features = ["sink", "std"] }
+futures-util = { workspace = true, features = ["std"] }

@@ -13,21 +13,6 @@ use tokio_util::sync::CancellationToken;
 use crate::config::ServerConfig;
 use crate::ingest::Event;
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct AggregatorConfig {
-    pub(crate) broadcast_interval_ms: u64,
-    pub(crate) rolling_window: usize,
-}
-
-impl From<&ServerConfig> for AggregatorConfig {
-    fn from(cfg: &ServerConfig) -> Self {
-        Self {
-            broadcast_interval_ms: cfg.broadcast_interval_ms,
-            rolling_window: cfg.rolling_window,
-        }
-    }
-}
-
 #[derive(Debug)]
 struct MetricState {
     kind: MetricKind,
@@ -75,7 +60,7 @@ impl MetricState {
         self.last_update_ms = now_ms;
     }
 
-    fn summarize(&self, name: &str, now: Instant, interval_s: f64) -> MetricSummary {
+    fn summarize(&self, name: &str) -> MetricSummary {
         let avg = if self.window.is_empty() {
             None
         } else {
@@ -83,20 +68,6 @@ impl MetricState {
             #[allow(clippy::cast_precision_loss)]
             let denom = self.window.len() as f64;
             Some(sum / denom)
-        };
-        let rate_pps = if interval_s > 0.0 && now >= self.last_update {
-            let elapsed = now
-                .saturating_duration_since(self.last_update)
-                .as_secs_f64();
-            if elapsed > interval_s * 4.0 {
-                0.0
-            } else {
-                #[allow(clippy::cast_precision_loss)]
-                let samples = self.window.len() as f64;
-                samples / interval_s.max(f64::EPSILON)
-            }
-        } else {
-            0.0
         };
         MetricSummary {
             name: name.to_owned(),
@@ -106,7 +77,7 @@ impl MetricState {
             min: Some(self.min),
             max: Some(self.max),
             avg,
-            rate_pps,
+            rate_pps: 0.0,
             sample_count: self.sample_count,
             last_update_ms: Some(self.last_update_ms),
         }
@@ -151,11 +122,11 @@ impl MetricStore {
         }
     }
 
-    fn snapshot(&self, now: Instant, interval_s: f64) -> Vec<MetricSummary> {
+    fn snapshot(&self) -> Vec<MetricSummary> {
         let mut out: Vec<MetricSummary> = self
             .map
             .iter()
-            .map(|(name, state)| state.summarize(name, now, interval_s))
+            .map(|(name, state)| state.summarize(name))
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out
@@ -165,7 +136,7 @@ impl MetricStore {
 pub(crate) async fn aggregator_task(
     mut rx: mpsc::Receiver<Event>,
     snap_tx: broadcast::Sender<Arc<Snapshot>>,
-    cfg: AggregatorConfig,
+    cfg: ServerConfig,
     started_at: Instant,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
@@ -175,6 +146,7 @@ pub(crate) async fn aggregator_task(
     let interval_s = period.as_secs_f64();
     let mut ticker = interval(period);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    // Consume the immediate first tick so t=0 doesn't emit an empty snapshot.
     ticker.tick().await;
 
     loop {
@@ -234,7 +206,7 @@ fn build_snapshot(
         schema_version: SNAPSHOT_SCHEMA_VERSION,
         generated_at_ms,
         uptime_ms,
-        metrics: store.snapshot(now, interval_s),
+        metrics: store.snapshot(),
         health: PipelineHealth {
             packets_received: health.packets_received,
             packets_parse_err: health.packets_parse_err,
@@ -245,10 +217,11 @@ fn build_snapshot(
     }
 }
 
-#[allow(clippy::cast_precision_loss)]
 fn value_as_f64(v: &ValueKind) -> f64 {
     match *v {
+        #[allow(clippy::cast_precision_loss)]
         ValueKind::U64(n) => n as f64,
+        #[allow(clippy::cast_precision_loss)]
         ValueKind::I64(n) => n as f64,
         ValueKind::F64(n) => n,
         ValueKind::Bool(b) => {
@@ -298,7 +271,7 @@ mod tests {
         store.ingest(packet("m", ValueKind::F64(10.0), 1), t0);
         store.ingest(packet("m", ValueKind::F64(5.0), 2), t0);
         store.ingest(packet("m", ValueKind::F64(20.0), 3), t0);
-        let out = store.snapshot(t0, 1.0);
+        let out = store.snapshot();
         let summary = out.iter().find(|s| s.name == "m").unwrap();
         assert_eq!(summary.last, Some(20.0));
         assert_eq!(summary.min, Some(5.0));
@@ -311,8 +284,8 @@ mod tests {
         let mut store = MetricStore::new(2);
         let t0 = Instant::now();
         for (i, v) in [1.0_f64, 2.0, 3.0].iter().enumerate() {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            store.ingest(packet("m", ValueKind::F64(*v), i as u64), t0);
+            let ts = u64::try_from(i).unwrap();
+            store.ingest(packet("m", ValueKind::F64(*v), ts), t0);
         }
         let state = store.map.get("m").unwrap();
         assert_eq!(state.window.len(), 2);

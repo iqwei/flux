@@ -1,29 +1,3 @@
-//! Flux server: UDP telemetry ingestion, aggregation, WebSocket broadcast.
-//!
-//! # Concurrency design
-//!
-//! ```text
-//! ingress_task (UDP recv loop) ─┐
-//!                               │ mpsc<Event>  (bounded: ingress_buffer)
-//!                               ▼
-//!                       aggregator_task
-//!                               │ broadcast<Arc<Snapshot>>  (bounded: broadcast_buffer)
-//!                               ▼
-//!                 ws_task ── N × subscriber_task ── WebSocket
-//!                               │
-//!                               └── SubscriberJoin / SubscriberLeave
-//!                                   back onto the same mpsc
-//! ```
-//!
-//! - The aggregator is the sole owner of [`MetricStore`]. No shared mutable
-//!   state, no locks.
-//! - Ingest fan-in is an mpsc; broadcast fan-out uses `tokio::sync::broadcast`.
-//!   A lagging subscriber is disconnected, never blocks the hub.
-//! - `CancellationToken` is the single shutdown primitive: every long-lived
-//!   task selects on it and exits cleanly.
-//!
-//! [`MetricStore`]: crate::aggregator::MetricStore
-
 mod aggregator;
 mod broadcast;
 pub mod config;
@@ -42,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 pub use crate::config::{ConfigOverrides, ServerConfig};
 
-use crate::aggregator::{aggregator_task, AggregatorConfig};
+use crate::aggregator::aggregator_task;
 use crate::broadcast::{ws_task, WsState};
 use crate::ingest::{ingress_task, Event};
 
@@ -50,6 +24,7 @@ use crate::ingest::{ingress_task, Event};
 pub struct BoundServer {
     pub udp_addr: SocketAddr,
     pub ws_addr: SocketAddr,
+    cancel: CancellationToken,
     tasks: JoinSet<anyhow::Result<()>>,
 }
 
@@ -57,18 +32,14 @@ impl BoundServer {
     pub async fn wait(mut self) -> anyhow::Result<()> {
         let mut first_err: Option<anyhow::Error> = None;
         while let Some(res) = self.tasks.join_next().await {
-            match res {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
-                    if first_err.is_none() {
-                        first_err = Some(err);
-                    }
-                }
-                Err(join_err) => {
-                    if first_err.is_none() {
-                        first_err = Some(anyhow::Error::new(join_err));
-                    }
-                }
+            let err = match res {
+                Ok(Ok(())) => continue,
+                Ok(Err(err)) => err,
+                Err(join_err) => anyhow::Error::new(join_err),
+            };
+            if first_err.is_none() {
+                first_err = Some(err);
+                self.cancel.cancel();
             }
         }
         match first_err {
@@ -104,12 +75,12 @@ pub async fn bind(cfg: ServerConfig, cancel: CancellationToken) -> anyhow::Resul
     {
         let cancel = cancel.clone();
         let tx = event_tx.clone();
-        tasks.spawn(async move { ingress_task(udp, tx, cancel).await.map_err(Into::into) });
+        tasks.spawn(async move { ingress_task(udp, tx, cancel).await });
     }
 
     {
         let cancel = cancel.clone();
-        let agg_cfg = AggregatorConfig::from(&cfg);
+        let agg_cfg = cfg.clone();
         tasks.spawn(async move {
             aggregator_task(event_rx, snap_tx, agg_cfg, started_at, cancel).await
         });
@@ -126,6 +97,7 @@ pub async fn bind(cfg: ServerConfig, cancel: CancellationToken) -> anyhow::Resul
     Ok(BoundServer {
         udp_addr,
         ws_addr,
+        cancel,
         tasks,
     })
 }

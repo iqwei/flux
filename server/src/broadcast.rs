@@ -38,7 +38,9 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<WsState>>) -> 
 
 async fn run_subscriber(mut socket: WebSocket, state: Arc<WsState>) {
     let mut rx = state.snapshots.subscribe();
-    let _ = state.events.send(Event::SubscriberJoin).await;
+    if let Err(err) = state.events.try_send(Event::SubscriberJoin) {
+        tracing::warn!(%err, "failed to emit SubscriberJoin");
+    }
     let reason = drive(&mut socket, &mut rx).await;
     match reason {
         ExitReason::Lagged(n) => {
@@ -46,7 +48,9 @@ async fn run_subscriber(mut socket: WebSocket, state: Arc<WsState>) {
         }
         ExitReason::Closed | ExitReason::ClientGone | ExitReason::SendFailed => {}
     }
-    let _ = state.events.send(Event::SubscriberLeave).await;
+    if let Err(err) = state.events.try_send(Event::SubscriberLeave) {
+        tracing::debug!(%err, "failed to emit SubscriberLeave");
+    }
     let _ = socket.close().await;
 }
 

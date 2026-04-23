@@ -1,4 +1,3 @@
-use std::io;
 use std::time::Instant;
 
 use flux_proto::{FluxPacket, MAX_PACKET_BYTES};
@@ -18,15 +17,14 @@ pub(crate) async fn ingress_task(
     socket: UdpSocket,
     tx: mpsc::Sender<Event>,
     cancel: CancellationToken,
-) -> io::Result<()> {
+) -> anyhow::Result<()> {
     let mut buf = [0u8; MAX_PACKET_BYTES];
     loop {
         tokio::select! {
             biased;
             () = cancel.cancelled() => return Ok(()),
-            recv = socket.recv_from(&mut buf) => {
-                let (n, from) = recv?;
-                match FluxPacket::decode(&buf[..n]) {
+            recv = socket.recv_from(&mut buf) => match recv {
+                Ok((n, from)) => match FluxPacket::decode(&buf[..n]) {
                     Ok(packet) => {
                         if tx.send(Event::Packet(packet, Instant::now())).await.is_err() {
                             return Ok(());
@@ -38,6 +36,9 @@ pub(crate) async fn ingress_task(
                             return Ok(());
                         }
                     }
+                },
+                Err(err) => {
+                    tracing::warn!(%err, "UDP recv failed, continuing");
                 }
             }
         }
