@@ -1,5 +1,9 @@
 # Flux
 
+[![CI](https://github.com/iqwei/flux/actions/workflows/ci.yml/badge.svg)](https://github.com/iqwei/flux/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20or%20Apache--2.0-blue.svg)](./LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](./rust-toolchain.toml)
+
 Flux is a real-time telemetry pipeline workspace: `flux-producer` emits compact
 binary UDP packets, `flux-server` aggregates them into rolling summaries, and
 `flux-dashboard` renders the live stream in a terminal UI over WebSocket.
