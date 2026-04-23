@@ -27,6 +27,15 @@ pub fn rate(pps: f64) -> String {
 }
 
 #[must_use]
+pub fn rate_bare(pps: f64) -> String {
+    if pps.is_finite() {
+        format!("{pps:.1}")
+    } else {
+        MISSING.to_owned()
+    }
+}
+
+#[must_use]
 pub fn age(age_ms: Option<u64>) -> String {
     let Some(ms) = age_ms else {
         return MISSING.to_owned();
@@ -118,6 +127,23 @@ mod tests {
         assert_eq!(rate(0.0), "0.0/s");
         assert_eq!(rate(12.345), "12.3/s");
         assert_eq!(rate(f64::NAN), MISSING);
+    }
+
+    #[test]
+    fn rate_bare_strips_suffix() {
+        assert_eq!(rate_bare(0.0), "0.0");
+        assert_eq!(rate_bare(12.345), "12.3");
+        assert_eq!(rate_bare(f64::NAN), MISSING);
+        assert_eq!(rate_bare(f64::INFINITY), MISSING);
+    }
+
+    #[test]
+    fn countdown_secs_formats_tenths() {
+        assert_eq!(countdown_secs(0), "0.0s");
+        assert_eq!(countdown_secs(500), "0.5s");
+        assert_eq!(countdown_secs(999), "0.9s");
+        assert_eq!(countdown_secs(1_000), "1.0s");
+        assert_eq!(countdown_secs(12_300), "12.3s");
     }
 
     #[test]

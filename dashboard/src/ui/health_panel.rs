@@ -12,14 +12,14 @@ const SEPARATOR: &str = "  │  ";
 pub fn render(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let h = &app.health;
     let fields: [(&str, String); 5] = [
-        ("pps", format!("{:.1}", h.ingest_rate_pps)),
+        ("pps", fmt::rate_bare(h.ingest_rate_pps)),
         ("subs", h.subscriber_count.to_string()),
         ("up", fmt::uptime(h.uptime_ms)),
         ("pkts", h.packets_received.to_string()),
         ("parse-err", h.packets_parse_err.to_string()),
     ];
 
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(fields.len() * 3 + fields.len());
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(fields.len() * 3);
     for (i, (label, value)) in fields.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(

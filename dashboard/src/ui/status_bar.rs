@@ -16,7 +16,7 @@ pub fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
         ),
         Span::raw(text),
     ];
-    spans.extend(hint_spans());
+    spans.extend(hint_spans(app.filter_mode));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -80,17 +80,27 @@ fn status_text(app: &App) -> (&'static str, String, Color) {
     }
 }
 
-fn hint_spans() -> Vec<Span<'static>> {
+fn hint_spans(filter_mode: bool) -> Vec<Span<'static>> {
     let key_style = Style::default()
         .fg(Color::Cyan)
         .add_modifier(Modifier::BOLD);
-    vec![
-        Span::raw("   "),
-        Span::styled("?", key_style),
-        Span::raw(" help · "),
-        Span::styled("/", key_style),
-        Span::raw(" filter · "),
-        Span::styled("q", key_style),
-        Span::raw(" quit"),
-    ]
+    if filter_mode {
+        vec![
+            Span::raw("   "),
+            Span::styled("Enter", key_style),
+            Span::raw(" apply · "),
+            Span::styled("Esc", key_style),
+            Span::raw(" cancel"),
+        ]
+    } else {
+        vec![
+            Span::raw("   "),
+            Span::styled("?", key_style),
+            Span::raw(" help · "),
+            Span::styled("/", key_style),
+            Span::raw(" filter · "),
+            Span::styled("q", key_style),
+            Span::raw(" quit"),
+        ]
+    }
 }

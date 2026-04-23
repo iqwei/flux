@@ -5,7 +5,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 const POPUP_WIDTH: u16 = 42;
-const POPUP_HEIGHT: u16 = 12;
+const POPUP_HEIGHT: u16 = 10;
 
 pub fn render(frame: &mut Frame<'_>, area: Rect) {
     let popup = centered(area, POPUP_WIDTH, POPUP_HEIGHT);

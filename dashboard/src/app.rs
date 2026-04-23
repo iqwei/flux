@@ -181,16 +181,13 @@ impl App {
             KeyCode::Char('q' | 'Q') => return Flow::Quit,
             KeyCode::Char('?') => self.help_open = true,
             KeyCode::Char('/') => self.filter_mode = true,
-            KeyCode::Esc => {
-                self.filter.clear();
-                self.scroll = 0;
-            }
+            KeyCode::Esc => self.filter.clear(),
             KeyCode::Up | KeyCode::Char('k') => self.scroll = self.scroll.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => self.scroll = self.scroll.saturating_add(1),
             KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(PAGE_SCROLL),
             KeyCode::PageDown => self.scroll = self.scroll.saturating_add(PAGE_SCROLL),
-            KeyCode::Home | KeyCode::Char('g') => self.scroll = 0,
-            KeyCode::End | KeyCode::Char('G') => self.scroll = usize::MAX,
+            KeyCode::Home => self.scroll = 0,
+            KeyCode::End => self.scroll = usize::MAX,
             _ => {}
         }
         Flow::Continue
