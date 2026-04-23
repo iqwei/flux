@@ -1,0 +1,16 @@
+[package]
+name = "flux-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Flux wire format and snapshot types."
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+bytes = { workspace = true }
