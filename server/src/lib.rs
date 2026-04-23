@@ -1,7 +1,7 @@
 mod aggregator;
-mod broadcast;
 pub mod config;
 mod ingest;
+mod ws;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -17,8 +17,8 @@ use tokio_util::sync::CancellationToken;
 pub use crate::config::{ConfigOverrides, ServerConfig};
 
 use crate::aggregator::aggregator_task;
-use crate::broadcast::{ws_task, WsState};
 use crate::ingest::{ingress_task, Event};
+use crate::ws::{ws_task, WsState};
 
 #[derive(Debug)]
 pub struct BoundServer {
