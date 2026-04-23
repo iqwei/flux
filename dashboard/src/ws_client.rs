@@ -16,7 +16,7 @@ use crate::config::ReconnectPolicy;
 
 const BACKOFF_SHIFT_CAP: u32 = 10;
 
-type Stream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 pub async fn run_ws(
     url: String,
@@ -30,7 +30,7 @@ pub async fn run_ws(
             return;
         }
         match connect(&url, &cancel).await {
-            Connect::Established(stream) => {
+            Connect::Ok(stream) => {
                 attempt = 0;
                 if tx.send(AppEvent::Connected).await.is_err() {
                     return;
@@ -44,7 +44,7 @@ pub async fn run_ws(
                 }
             }
             Connect::Failed(err) => {
-                tracing::debug!(%err, url = %url, "ws connect failed");
+                tracing::info!(%err, url = %url, "ws connect failed");
                 if cancel.is_cancelled() {
                     return;
                 }
@@ -74,7 +74,7 @@ pub async fn run_ws(
 }
 
 enum Connect {
-    Established(Stream),
+    Ok(WsStream),
     Failed(tokio_tungstenite::tungstenite::Error),
     Cancelled,
 }
@@ -84,13 +84,13 @@ async fn connect(url: &str, cancel: &CancellationToken) -> Connect {
         biased;
         () = cancel.cancelled() => Connect::Cancelled,
         res = connect_async(url) => match res {
-            Ok((stream, _)) => Connect::Established(stream),
+            Ok((stream, _)) => Connect::Ok(stream),
             Err(err) => Connect::Failed(err),
         }
     }
 }
 
-async fn pump(mut stream: Stream, tx: &mpsc::Sender<AppEvent>, cancel: &CancellationToken) {
+async fn pump(mut stream: WsStream, tx: &mpsc::Sender<AppEvent>, cancel: &CancellationToken) {
     loop {
         tokio::select! {
             biased;
@@ -103,7 +103,7 @@ async fn pump(mut stream: Stream, tx: &mpsc::Sender<AppEvent>, cancel: &Cancella
                                 return;
                             }
                         }
-                        Err(err) => tracing::debug!(%err, "invalid snapshot payload"),
+                        Err(err) => tracing::warn!(%err, "invalid snapshot payload"),
                     }
                 }
                 Some(Ok(
@@ -114,7 +114,7 @@ async fn pump(mut stream: Stream, tx: &mpsc::Sender<AppEvent>, cancel: &Cancella
                 )) => {}
                 Some(Ok(Message::Close(_))) | None => return,
                 Some(Err(err)) => {
-                    tracing::debug!(%err, "ws recv error");
+                    tracing::warn!(%err, "ws recv error");
                     return;
                 }
             }

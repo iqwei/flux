@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use crossterm::cursor::Show;
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -84,10 +85,16 @@ async fn run_app(cfg: DashboardConfig, terminal: &mut DashTerminal) -> Result<()
     }
 
     cancel.cancel();
-    let _ = ws_handle.await;
-    let _ = input_handle.await;
-    let _ = signal_handle.await;
+    join_task("ws", ws_handle).await;
+    join_task("input", input_handle).await;
+    join_task("signal", signal_handle).await;
     Ok(())
+}
+
+async fn join_task(name: &'static str, handle: JoinHandle<()>) {
+    if let Err(err) = handle.await {
+        tracing::error!(%err, task = name, "task aborted");
+    }
 }
 
 fn spawn_ws_client(
@@ -163,7 +170,7 @@ fn install_panic_hook() {
     let original = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
         original(info);
     }));
 }
@@ -173,10 +180,13 @@ fn init_tracing(path: Option<&Path>) -> Result<()> {
     let file = std::fs::File::create(path)
         .with_context(|| format!("creating log file {}", path.display()))?;
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = tracing_subscriber::fmt()
+    if let Err(err) = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(Mutex::new(file))
         .with_ansi(false)
-        .try_init();
+        .try_init()
+    {
+        eprintln!("flux-dashboard: tracing already initialised: {err}");
+    }
     Ok(())
 }

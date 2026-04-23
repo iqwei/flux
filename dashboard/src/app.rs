@@ -10,7 +10,6 @@ pub enum AppEvent {
     Connected,
     Disconnected,
     Reconnecting { attempt: u32, in_ms: u64 },
-    Tick,
     Key(KeyEvent),
 }
 
@@ -35,9 +34,6 @@ pub struct App {
     pub health: PipelineHealth,
     pub connection: ConnectionState,
     pub last_snapshot_at: Option<Instant>,
-    pub scroll: usize,
-    pub filter: Option<String>,
-    pub help_open: bool,
 }
 
 impl App {
@@ -49,9 +45,6 @@ impl App {
             health: PipelineHealth::default(),
             connection: ConnectionState::Connecting,
             last_snapshot_at: None,
-            scroll: 0,
-            filter: None,
-            help_open: false,
         }
     }
 
@@ -73,7 +66,6 @@ impl App {
                 self.connection = ConnectionState::Reconnecting { attempt, in_ms };
                 Flow::Continue
             }
-            AppEvent::Tick => Flow::Continue,
             AppEvent::Key(key) => handle_key(key),
         }
     }

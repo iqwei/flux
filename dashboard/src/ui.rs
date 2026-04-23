@@ -24,6 +24,11 @@ const HEADER_LABELS: [&str; 8] = [
     "metric", "unit", "last", "min", "max", "avg", "pps", "samples",
 ];
 
+const _: () = assert!(
+    HEADER_LABELS.len() == COLUMN_WIDTHS.len(),
+    "HEADER_LABELS and COLUMN_WIDTHS must stay the same length",
+);
+
 pub fn render(frame: &mut Frame<'_>, app: &App) {
     let [table_area, status_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(STATUS_BAR_HEIGHT)])
@@ -81,10 +86,10 @@ fn format_value(v: Option<f64>, kind: MetricKind) -> String {
             MetricKind::U64 | MetricKind::I64 => format!("{x:.0}"),
             MetricKind::F64 => format!("{x:.3}"),
             MetricKind::Bool => {
-                if x >= 0.5 {
-                    "true".to_owned()
-                } else {
+                if x == 0.0 {
                     "false".to_owned()
+                } else {
+                    "true".to_owned()
                 }
             }
         },
