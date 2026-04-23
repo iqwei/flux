@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flux_proto::{Snapshot, SNAPSHOT_SCHEMA_VERSION};
-use tokio::sync::{broadcast, mpsc};
-use tokio::time::{interval, MissedTickBehavior};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use tokio::time::{interval, timeout, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
 use crate::clock::Clock;
@@ -15,12 +15,15 @@ use crate::metric_store::MetricStore;
 pub(crate) async fn aggregator_task(
     mut rx: mpsc::Receiver<Event>,
     snap_tx: broadcast::Sender<Arc<Snapshot>>,
+    final_snapshot_tx: watch::Sender<Option<Arc<Snapshot>>>,
     cfg: ServerConfig,
     clock: Arc<dyn Clock>,
+    mut ingress_done: oneshot::Receiver<()>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
     let started_at = clock.now();
     let window = Duration::from_millis(cfg.rolling_window_ms);
+    let shutdown_budget = Duration::from_millis(cfg.shutdown_budget_ms);
     let mut store = MetricStore::new(window, started_at);
     let mut health = HealthTracker::new(window, started_at);
 
@@ -32,9 +35,25 @@ pub(crate) async fn aggregator_task(
         tokio::select! {
             biased;
             () = cancel.cancelled() => {
+                if !drain_until_ingress_stops(
+                    &mut rx,
+                    &mut store,
+                    &mut health,
+                    clock.as_ref(),
+                    &mut ingress_done,
+                    shutdown_budget,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        budget_ms = cfg.shutdown_budget_ms,
+                        "aggregator: shutdown budget exceeded before ingress stopped"
+                    );
+                }
                 drain(&mut rx, &mut store, &mut health, clock.as_ref());
-                let snap = build_snapshot(&mut store, &mut health, clock.as_ref());
-                let _ = snap_tx.send(Arc::new(snap));
+                let snap = Arc::new(build_snapshot(&mut store, &mut health, clock.as_ref()));
+                let _ = final_snapshot_tx.send(Some(Arc::clone(&snap)));
+                let _ = snap_tx.send(snap);
                 tracing::debug!("aggregator: final snapshot emitted, exiting");
                 return Ok(());
             }
@@ -48,6 +67,36 @@ pub(crate) async fn aggregator_task(
             }
         }
     }
+}
+
+async fn drain_until_ingress_stops(
+    rx: &mut mpsc::Receiver<Event>,
+    store: &mut MetricStore,
+    health: &mut HealthTracker,
+    clock: &dyn Clock,
+    ingress_done: &mut oneshot::Receiver<()>,
+    shutdown_budget: Duration,
+) -> bool {
+    let drain_future = async {
+        loop {
+            drain(rx, store, health, clock);
+            tokio::select! {
+                biased;
+                res = &mut *ingress_done => {
+                    if res.is_err() {
+                        tracing::debug!("aggregator: ingress completion signal dropped");
+                    }
+                    break;
+                }
+                maybe = rx.recv() => match maybe {
+                    Some(event) => apply_event(event, store, health, clock),
+                    None => break,
+                }
+            }
+        }
+    };
+
+    timeout(shutdown_budget, drain_future).await.is_ok()
 }
 
 fn drain(

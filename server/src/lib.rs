@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use flux_proto::Snapshot;
 use tokio::net::{TcpListener, UdpSocket};
-use tokio::sync::{broadcast as bcast, mpsc};
+use tokio::sync::{broadcast as bcast, mpsc, oneshot, watch};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -136,6 +136,9 @@ pub async fn bind_with_clock(
 
     let (event_tx, event_rx) = mpsc::channel::<Event>(cfg.ingress_buffer);
     let (snap_tx, _) = bcast::channel::<Arc<Snapshot>>(cfg.broadcast_buffer);
+    let (ingress_done_tx, ingress_done_rx) = oneshot::channel();
+    let (final_snapshot_tx, final_snapshot_rx) = watch::channel::<Option<Arc<Snapshot>>>(None);
+    let shutdown_budget = Duration::from_millis(cfg.shutdown_budget_ms);
 
     let ws_state = Arc::new(WsState {
         events: event_tx.clone(),
@@ -147,16 +150,29 @@ pub async fn bind_with_clock(
     {
         let cancel = cancel.clone();
         let tx = event_tx.clone();
-        tasks.spawn(async move { ingress_task(udp, tx, cancel).await });
+        tasks.spawn(async move {
+            let result = ingress_task(udp, tx, shutdown_budget, cancel).await;
+            let _ = ingress_done_tx.send(());
+            result
+        });
     }
 
     {
         let cancel = cancel.clone();
         let agg_cfg = cfg.clone();
         let agg_clock = Arc::clone(&clock);
-        tasks.spawn(
-            async move { aggregator_task(event_rx, snap_tx, agg_cfg, agg_clock, cancel).await },
-        );
+        tasks.spawn(async move {
+            aggregator_task(
+                event_rx,
+                snap_tx,
+                final_snapshot_tx,
+                agg_cfg,
+                agg_clock,
+                ingress_done_rx,
+                cancel,
+            )
+            .await
+        });
     }
 
     drop(event_tx);
@@ -164,10 +180,11 @@ pub async fn bind_with_clock(
     {
         let cancel = cancel.clone();
         let state = ws_state;
-        tasks.spawn(async move { ws_task(ws_listener, state, cancel).await });
+        tasks.spawn(async move {
+            ws_task(ws_listener, state, final_snapshot_rx, shutdown_budget, cancel).await
+        });
     }
 
-    let shutdown_budget = Duration::from_millis(cfg.shutdown_budget_ms);
     Ok(BoundServer {
         udp_addr,
         ws_addr,

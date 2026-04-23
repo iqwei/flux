@@ -90,7 +90,9 @@ async fn cancellation_shuts_down_cleanly_with_no_traffic() {
 async fn shutdown_under_traffic_stays_within_budget_and_closes_ws() {
     let cfg = ServerConfig {
         shutdown_budget_ms: 750,
-        broadcast_interval_ms: 50,
+        broadcast_buffer: 2,
+        broadcast_interval_ms: 20,
+        ingress_buffer: 1,
         ..ephemeral_cfg()
     };
     let cancel = CancellationToken::new();
@@ -107,18 +109,23 @@ async fn shutdown_under_traffic_stays_within_budget_and_closes_ws() {
     .unwrap()
     .unwrap();
 
-    let traffic_cancel = CancellationToken::new();
-    let traffic = spawn_producer(udp_addr, traffic_cancel.clone());
-    let _ = timeout(Duration::from_millis(400), ws.next()).await;
+    let producer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    for _ in 0..20 {
+        send_packet(&producer, udp_addr, 1.0).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    send_packet(&producer, udp_addr, 99.0).await;
 
     let start = Instant::now();
     cancel.cancel();
-    traffic_cancel.cancel();
-    traffic.await.unwrap();
 
     let mut saw_close = false;
+    let mut last_snapshot: Option<Snapshot> = None;
     while let Ok(Some(frame)) = timeout(Duration::from_millis(500), ws.next()).await {
         match frame {
+            Ok(Message::Text(text)) => {
+                last_snapshot = Some(serde_json::from_str(&text).unwrap());
+            }
             Ok(Message::Close(_)) => {
                 saw_close = true;
                 break;
@@ -139,24 +146,23 @@ async fn shutdown_under_traffic_stays_within_budget_and_closes_ws() {
         elapsed < Duration::from_millis(1_500),
         "shutdown took {elapsed:?}, expected < 1500ms"
     );
+    let last_snapshot = last_snapshot.expect("expected a final snapshot before close");
+    let load = last_snapshot
+        .metrics
+        .iter()
+        .find(|metric| metric.name == "load")
+        .and_then(|metric| metric.last);
+    assert_eq!(
+        load,
+        Some(99.0),
+        "expected final snapshot to carry the last packet sent before shutdown"
+    );
     assert!(saw_close, "expected WS Close frame during shutdown");
 }
 
-fn spawn_producer(target: SocketAddr, cancel: CancellationToken) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let packet = FluxPacket::new(1_700_000_000_000, "load".into(), ValueKind::F64(1.0));
-        let mut buf = [0u8; MAX_PACKET_BYTES];
-        let n = packet.encode(&mut buf).unwrap();
-        let mut ticker = tokio::time::interval(Duration::from_millis(10));
-        loop {
-            tokio::select! {
-                biased;
-                () = cancel.cancelled() => return,
-                _ = ticker.tick() => {
-                    let _ = sock.send_to(&buf[..n], target).await;
-                }
-            }
-        }
-    })
+async fn send_packet(sock: &UdpSocket, target: SocketAddr, value: f64) {
+    let packet = FluxPacket::new(1_700_000_000_000, "load".into(), ValueKind::F64(value));
+    let mut buf = [0u8; MAX_PACKET_BYTES];
+    let n = packet.encode(&mut buf).unwrap();
+    sock.send_to(&buf[..n], target).await.unwrap();
 }
