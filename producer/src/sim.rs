@@ -87,7 +87,10 @@ struct SteppedSim {
 
 impl Simulator for SteppedSim {
     fn next(&mut self, now: Instant) -> ValueKind {
-        debug_assert!(!self.values.is_empty(), "SteppedSim values must be non-empty");
+        debug_assert!(
+            !self.values.is_empty(),
+            "SteppedSim values must be non-empty"
+        );
         debug_assert!(self.dwell_ms > 0, "SteppedSim dwell_ms must be > 0");
         let elapsed_ms = now.saturating_duration_since(self.origin).as_millis();
         let dwell = u128::from(self.dwell_ms);

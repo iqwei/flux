@@ -12,7 +12,7 @@ pub const DEFAULT_WS_PORT: u16 = 9001;
 pub const DEFAULT_BROADCAST_INTERVAL_MS: u64 = 500;
 pub const DEFAULT_INGRESS_BUFFER: usize = 4096;
 pub const DEFAULT_BROADCAST_BUFFER: usize = 16;
-pub const DEFAULT_ROLLING_WINDOW: usize = 64;
+pub const DEFAULT_ROLLING_WINDOW_MS: u64 = 5_000;
 pub const DEFAULT_STALE_AFTER_MS: u64 = 3_000;
 pub const DEFAULT_DEAD_AFTER_MS: u64 = 10_000;
 
@@ -26,7 +26,7 @@ pub struct ServerConfig {
     pub broadcast_interval_ms: u64,
     pub ingress_buffer: usize,
     pub broadcast_buffer: usize,
-    pub rolling_window: usize,
+    pub rolling_window_ms: u64,
     pub stale_after_ms: u64,
     pub dead_after_ms: u64,
 }
@@ -39,7 +39,7 @@ impl Default for ServerConfig {
             broadcast_interval_ms: DEFAULT_BROADCAST_INTERVAL_MS,
             ingress_buffer: DEFAULT_INGRESS_BUFFER,
             broadcast_buffer: DEFAULT_BROADCAST_BUFFER,
-            rolling_window: DEFAULT_ROLLING_WINDOW,
+            rolling_window_ms: DEFAULT_ROLLING_WINDOW_MS,
             stale_after_ms: DEFAULT_STALE_AFTER_MS,
             dead_after_ms: DEFAULT_DEAD_AFTER_MS,
         }
@@ -91,8 +91,8 @@ impl ServerConfig {
         if let Some(v) = parse_env::<usize>("BROADCAST_BUFFER")? {
             self.broadcast_buffer = v;
         }
-        if let Some(v) = parse_env::<usize>("ROLLING_WINDOW")? {
-            self.rolling_window = v;
+        if let Some(v) = parse_env::<u64>("ROLLING_WINDOW_MS")? {
+            self.rolling_window_ms = v;
         }
         if let Some(v) = parse_env::<u64>("STALE_AFTER_MS")? {
             self.stale_after_ms = v;
@@ -122,8 +122,8 @@ impl ServerConfig {
         if self.broadcast_buffer == 0 {
             return Err(anyhow!("broadcast_buffer must be > 0"));
         }
-        if self.rolling_window == 0 {
-            return Err(anyhow!("rolling_window must be > 0"));
+        if self.rolling_window_ms == 0 {
+            return Err(anyhow!("rolling_window_ms must be > 0"));
         }
         if self.stale_after_ms >= self.dead_after_ms {
             return Err(anyhow!("stale_after_ms must be < dead_after_ms"));

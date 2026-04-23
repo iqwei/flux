@@ -1,11 +1,13 @@
 mod aggregator;
+pub mod clock;
 pub mod config;
+pub mod health;
 mod ingest;
+pub mod metric_store;
 mod ws;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Instant;
 
 use anyhow::Context;
 use flux_proto::Snapshot;
@@ -14,6 +16,7 @@ use tokio::sync::{broadcast as bcast, mpsc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+pub use crate::clock::{Clock, FakeClock, SystemClock};
 pub use crate::config::{ConfigOverrides, ServerConfig};
 
 use crate::aggregator::aggregator_task;
@@ -50,8 +53,14 @@ impl BoundServer {
 }
 
 pub async fn bind(cfg: ServerConfig, cancel: CancellationToken) -> anyhow::Result<BoundServer> {
-    let started_at = Instant::now();
+    bind_with_clock(cfg, Arc::new(SystemClock), cancel).await
+}
 
+pub async fn bind_with_clock(
+    cfg: ServerConfig,
+    clock: Arc<dyn Clock>,
+    cancel: CancellationToken,
+) -> anyhow::Result<BoundServer> {
     let udp = UdpSocket::bind(cfg.udp_bind)
         .await
         .with_context(|| format!("binding UDP socket on {}", cfg.udp_bind))?;
@@ -81,9 +90,10 @@ pub async fn bind(cfg: ServerConfig, cancel: CancellationToken) -> anyhow::Resul
     {
         let cancel = cancel.clone();
         let agg_cfg = cfg.clone();
-        tasks.spawn(async move {
-            aggregator_task(event_rx, snap_tx, agg_cfg, started_at, cancel).await
-        });
+        let agg_clock = Arc::clone(&clock);
+        tasks.spawn(
+            async move { aggregator_task(event_rx, snap_tx, agg_cfg, agg_clock, cancel).await },
+        );
     }
 
     drop(event_tx);
