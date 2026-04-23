@@ -1,5 +1,5 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
@@ -49,10 +49,8 @@ fn period_from_rate(rate_hz: f64) -> Result<Duration> {
         return Err(anyhow!("rate_hz must be finite and > 0 (got {rate_hz})"));
     }
     let secs = 1.0 / rate_hz;
-    if !secs.is_finite() || secs <= 0.0 {
-        return Err(anyhow!("derived period is not finite (rate_hz={rate_hz})"));
-    }
-    Ok(Duration::from_secs_f64(secs))
+    Duration::try_from_secs_f64(secs)
+        .map_err(|err| anyhow!("rate_hz={rate_hz} produces unrepresentable period: {err}"))
 }
 
 fn seed_from_name(name: &str) -> u64 {
@@ -62,9 +60,23 @@ fn seed_from_name(name: &str) -> u64 {
 }
 
 fn unix_now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+    static CLOCK_SKEW_WARNED: OnceLock<()> = OnceLock::new();
+    static CLOCK_OVERFLOW_WARNED: OnceLock<()> = OnceLock::new();
+
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => u64::try_from(d.as_millis()).unwrap_or_else(|_| {
+            CLOCK_OVERFLOW_WARNED.get_or_init(|| {
+                tracing::warn!("system clock exceeds u64 ms; clamping packet timestamp to MAX");
+            });
+            u64::MAX
+        }),
+        Err(err) => {
+            CLOCK_SKEW_WARNED.get_or_init(|| {
+                tracing::warn!(%err, "system clock is before UNIX_EPOCH; using 0 for packet timestamp");
+            });
+            0
+        }
+    }
 }
 
 #[cfg(test)]
@@ -83,6 +95,12 @@ mod tests {
         assert!(period_from_rate(-1.0).is_err());
         assert!(period_from_rate(f64::NAN).is_err());
         assert!(period_from_rate(f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn period_from_rate_rejects_unrepresentable_period() {
+        // rate_hz -> 0 makes 1/rate_hz overflow Duration's representable range.
+        assert!(period_from_rate(f64::MIN_POSITIVE).is_err());
     }
 
     #[test]

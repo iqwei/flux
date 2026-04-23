@@ -7,6 +7,8 @@ use rand::{Rng, SeedableRng};
 
 use crate::config::Simulation;
 
+const MS_PER_SEC: f64 = 1_000.0;
+
 pub trait Simulator: Send {
     fn next(&mut self, now: Instant) -> ValueKind;
 }
@@ -56,12 +58,7 @@ struct RandomRangeSim {
 
 impl Simulator for RandomRangeSim {
     fn next(&mut self, _now: Instant) -> ValueKind {
-        let value = if (self.max - self.min).abs() < f64::EPSILON {
-            self.min
-        } else {
-            self.rng.gen_range(self.min..=self.max)
-        };
-        ValueKind::F64(value)
+        ValueKind::F64(self.rng.gen_range(self.min..=self.max))
     }
 }
 
@@ -74,7 +71,7 @@ struct SineSim {
 
 impl Simulator for SineSim {
     fn next(&mut self, now: Instant) -> ValueKind {
-        let elapsed_ms = now.saturating_duration_since(self.origin).as_secs_f64() * 1_000.0;
+        let elapsed_ms = now.saturating_duration_since(self.origin).as_secs_f64() * MS_PER_SEC;
         #[allow(clippy::cast_precision_loss)]
         let period = self.period_ms as f64;
         let phase = TAU * (elapsed_ms / period);
@@ -90,13 +87,14 @@ struct SteppedSim {
 
 impl Simulator for SteppedSim {
     fn next(&mut self, now: Instant) -> ValueKind {
-        let len = self.values.len().max(1);
+        debug_assert!(!self.values.is_empty(), "SteppedSim values must be non-empty");
+        debug_assert!(self.dwell_ms > 0, "SteppedSim dwell_ms must be > 0");
         let elapsed_ms = now.saturating_duration_since(self.origin).as_millis();
-        let dwell = u128::from(self.dwell_ms.max(1));
-        let step = elapsed_ms / dwell;
-        let modulo = u128::try_from(len).unwrap_or(u128::MAX);
-        let idx = usize::try_from(step % modulo).unwrap_or(0);
-        ValueKind::F64(self.values.get(idx).copied().unwrap_or(0.0))
+        let dwell = u128::from(self.dwell_ms);
+        let len = self.values.len() as u128;
+        #[allow(clippy::cast_possible_truncation)]
+        let idx = (elapsed_ms / dwell % len) as usize;
+        ValueKind::F64(self.values[idx])
     }
 }
 

@@ -38,11 +38,14 @@ fn init_tracing(level: Option<&str>) -> Result<()> {
             .with_context(|| format!("invalid --log filter: {explicit}"))?,
         None => EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
     };
-    let _ = fmt()
+    if let Err(err) = fmt()
         .with_env_filter(filter)
         .with_target(false)
         .with_level(true)
-        .try_init();
+        .try_init()
+    {
+        eprintln!("warning: failed to initialise tracing subscriber: {err}");
+    }
     Ok(())
 }
 

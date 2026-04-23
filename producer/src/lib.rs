@@ -42,6 +42,7 @@ pub async fn run(cfg: ProducerConfig, cancel: CancellationToken) -> Result<()> {
             Ok(Err(err)) => err,
             Err(join_err) => anyhow::Error::new(join_err),
         };
+        tracing::error!(error = ?err, "emitter task failed");
         if first_err.is_none() {
             first_err = Some(err);
             cancel.cancel();
