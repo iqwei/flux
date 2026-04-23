@@ -181,7 +181,14 @@ pub async fn bind_with_clock(
         let cancel = cancel.clone();
         let state = ws_state;
         tasks.spawn(async move {
-            ws_task(ws_listener, state, final_snapshot_rx, shutdown_budget, cancel).await
+            ws_task(
+                ws_listener,
+                state,
+                final_snapshot_rx,
+                shutdown_budget,
+                cancel,
+            )
+            .await
         });
     }
 

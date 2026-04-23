@@ -93,11 +93,7 @@ async fn drain_ready_datagrams(
     }
 }
 
-async fn forward_datagram(
-    tx: &mpsc::Sender<Event>,
-    bytes: &[u8],
-    from: SocketAddr,
-) -> bool {
+async fn forward_datagram(tx: &mpsc::Sender<Event>, bytes: &[u8], from: SocketAddr) -> bool {
     match FluxPacket::decode(bytes) {
         Ok(packet) => tx.send(Event::Packet(packet, Instant::now())).await.is_ok(),
         Err(err) => {

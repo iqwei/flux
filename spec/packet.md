@@ -24,6 +24,14 @@ truncated input without allocating or executing unsafe code.
 Reference implementation: [`flux-proto`](../proto) crate
 (`FluxPacket::encode` / `FluxPacket::decode`).
 
+Related docs:
+
+- [Workspace quickstart](../README.md)
+- [Configuration reference](../docs/config.md)
+
+This document covers the producer-to-server UDP hop only. The server-to-client
+hop is a JSON `Snapshot` stream over WebSocket at `/ws`.
+
 ## Byte layout
 
 ```
@@ -182,4 +190,3 @@ long enough for `service.component.submetric` style names and short enough
 that the worst-case packet stays well under typical MTU. The cap is
 enforced both on encode and decode, and violations are distinguishable
 errors (`NameTooLong`).
-
